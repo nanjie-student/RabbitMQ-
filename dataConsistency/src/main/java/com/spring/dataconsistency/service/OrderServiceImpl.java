@@ -2,10 +2,13 @@ package com.spring.dataconsistency.service;
 
 import com.spring.dataconsistency.dao.OrderRepository;
 import com.spring.dataconsistency.pojo.Order;
-import com.spring.dataconsistency.rabbitMQ.OrderProducer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
 
 @Service
 public class OrderServiceImpl implements OrderService{
@@ -14,16 +17,45 @@ public class OrderServiceImpl implements OrderService{
     private OrderRepository orderRepository;
 
     @Autowired
-    private OrderProducer orderProducer;
+    private ShopifyClient shopifyClient;
+
+    @Autowired
+    private EtsyClient etsyClient;
 
 
     @Override
-    @Transactional
-    public void processOrder(Order order) {
+    public void createOrder(Order order) {
+        //set order created time
+        order.setCreatedAt(LocalDateTime.now());
         orderRepository.save(order);
-        //发送到RabbitMQ进行异步库存更新
-        orderProducer.sendOrderToQueue(order);
-        //System.out.println("📩 Order saved and added to queue: " + order);
 
+    }
+
+    @Override
+    public Order getOrderById(String orderId) {
+        Optional<Order> orderOptional = orderRepository.findById(orderId);
+        if (orderOptional.isPresent()) {
+            return orderOptional.get(); // 返回订单
+        } else {
+            throw new RuntimeException("Order not found with id: " + orderId);
+        }
+    }
+
+    @Override
+    public List<Order> getOrdersByPlatform(String platform) {
+        return orderRepository.findByPlatform(platform);
+    }
+    @Transactional
+    @Override
+    public void updateOrderStatus(String orderId, String newStatus) {
+        // 更新本地订单状态
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new RuntimeException("Order not found"));
+        order.setStatus(newStatus);
+        orderRepository.save(order);
+
+        // 同步订单状态到 Shopify 和 Etsy
+        shopifyClient.updateOrderStatus(orderId, newStatus);
+        etsyClient.updateOrderStatus(orderId, newStatus);
     }
 }
